@@ -14,17 +14,6 @@ from sklearn.model_selection import train_test_split
 
 from scipy.ndimage import gaussian_filter1d
 
-SATELLITE_SUB_LABEL_LOOKUP = {
-    'SSCK': 0,
-    'SSEK': 1,
-    'SSHK': 2,
-    'SSNK': 3,
-    'IKCK': 0,
-    'IKEK': 1,
-    'IKHK': 2,
-    'IDNK': 3,
-    'ADNK': 4,
-}
 
 
 def get_window_feature(data, sampling_interval):
@@ -77,24 +66,23 @@ class SatellitePoL(data.Dataset):
     Satellite PoL dataset
 
     '''
-    def __init__(self, data_dir, object_lists,  selected_features = None):
+    def __init__(self, data_dir, object_lists, labelfile, selected_features = None):
         self.data_dir = data_dir
-
+        self.labelfile = labelfile
 
         self.seq_data = []
         self.seq_sup_labels = []
         self.seq_sup_boundary_labels = []
         self.seq_sub_labels = []
         self.seq_sub_boundary_labels = []
-
-        # labeldata = pd.read_csv(self.labelfile)
+        self.seq_levels= []
+        labeldata = pd.read_csv(self.labelfile)
 
         for obj_id in tqdm(object_lists):
 
 
             # 读文件路径
             data_path = os.path.join(self.data_dir, str(obj_id)+'.csv')
-
             data = pd.read_csv(data_path, index_col='TimeStep')
 
             # TODO
@@ -102,16 +90,73 @@ class SatellitePoL(data.Dataset):
 
             # get the selected features
             data = data[selected_features].values
-            data = data[:11400, :]
+            # data = data[:120, :]
+
+            # # get the windowed feature
+            # data 
+
+            # label data
+            node_label = labeldata[(labeldata['ObjectID'] == obj_id) ]
+
+            seq_sup_label = np.zeros((data.shape[0], 1), dtype=np.int16)
+            seq_sub_label = np.zeros((data.shape[0], 1), dtype=np.int16)
+            seq_level = np.zeros((data.shape[0], 1), dtype=np.int16)
+
+            for ii in range(len(node_label)):
+                cur_label = node_label.iloc[ii]['Label']
+                cur_idx = node_label.iloc[ii]['TimeIndex']
+                seq_sub_label[cur_idx:] = cur_label
+                if ii == 1:
+                    if (node_label.iloc[ii]['level']=='low'):
+                        seq_level[0:] = 1
+                    elif (node_label.iloc[ii]['level']=='mid'):
+                        seq_level[0:] = 2
+                    elif (node_label.iloc[ii]['level']=='high'):
+                        seq_level[0:] = 3
+                    else:
+                        seq_level[0:] = 0
+
+            seq_sub_boundary = np.zeros((data.shape[0], 1), dtype=np.float32)
+            boundary_idx = np.where(seq_sub_label[1:] != seq_sub_label[:-1])[0]
+            seq_sub_boundary[boundary_idx] = 1
+            seq_sub_boundary[boundary_idx - 1] = 1
+
+            if seq_sub_boundary.max() == 1:  
+                t = boundary_smooth(seq_sub_boundary, 12*2)
+
+            seq_sup_boundary = np.zeros((data.shape[0], 1), dtype=np.float32)
+            boundary_idx = np.where(seq_sup_label[1:] != seq_sup_label[:-1])[0]
+            seq_sup_boundary[boundary_idx] = 1
+            seq_sup_boundary[boundary_idx - 1] = 1
+
+            if seq_sup_boundary.max() == 1:  
+                t = boundary_smooth(seq_sup_boundary, 12*2)
+
+            # align length
+            seq_sub_label = seq_sub_label[:data.shape[0]]
+            seq_sup_label = seq_sup_label[:data.shape[0]]
+            seq_sub_boundary = seq_sub_boundary[:data.shape[0]]
+            seq_sup_boundary = seq_sup_boundary[:data.shape[0]]
+            seq_level = seq_level[:data.shape[0]]
 
 
+            # append feature and label
             self.seq_data.append(data)
+            self.seq_sup_labels.append(seq_sup_label)
+            self.seq_sub_labels.append(seq_sub_label)
+            self.seq_levels.append(seq_level)
 
+
+            self.seq_sup_boundary_labels.append(seq_sup_boundary)
+            self.seq_sub_boundary_labels.append(seq_sub_boundary)
 
         self.seq_data = np.stack(self.seq_data).astype(np.float32)
 
-
-
+        self.seq_sup_labels = np.stack(self.seq_sup_labels).astype(np.int64)
+        self.seq_sub_labels = np.stack(self.seq_sub_labels).astype(np.int64)
+        self.seq_sup_boundary_labels = np.stack(self.seq_sup_boundary_labels).astype(np.int64)
+        self.seq_sub_boundary_labels = np.stack(self.seq_sub_boundary_labels).astype(np.int64)
+        self.seq_levels = np.stack(self.seq_levels).astype(np.int64)
 
     def normalize(self, scaler=None):
 
@@ -141,14 +186,14 @@ class SatellitePoL(data.Dataset):
     def __getitem__(self, idx):
 
         X = self.seq_data[idx]
-        # target = {'sup_label': self.seq_sup_labels[idx],
-        #           'sub_label': self.seq_sub_labels[idx],
-        #           'sup_boundary_label': self.seq_sup_boundary_labels[idx],
-        #           'sub_boundary_label': self.seq_sub_boundary_labels[idx]
-        #           }
+        target = {'sup_label': self.seq_sup_labels[idx],
+                  'sub_label': self.seq_sub_labels[idx],
+                  'sup_boundary_label': self.seq_sup_boundary_labels[idx],
+                  'sub_boundary_label': self.seq_sub_boundary_labels[idx],
+                  'level': self.seq_levels[idx]
+                  }
 
-        # return X, target
-        return X
+        return X, target
 
 
     
@@ -159,8 +204,6 @@ if __name__ == "__main__":
 
     # data_dir = "sate_data/train/"
 
-    # data_dir = "sate_data/train_with_timestamps/"
-    # 获取当前脚本所在的目录
     current_dir = os.path.dirname(os.path.abspath(__file__))
     data_dir = os.path.join(
         current_dir,  # 当前脚本所在目录
@@ -170,23 +213,22 @@ if __name__ == "__main__":
         'div',
 
     )
-    labelfile = "sate_data/train_labels.csv"
+    labelfile = "sate_data/300_train_labels.csv"
     # 离心率，半长轴，轨道倾角，升交点赤经，近地点幅角，真近点角，维度，经度，高度
-    # selected_features = ["Eccentricity", "Semimajor Axis (m)", "Inclination (deg)", "RAAN (deg)", "Argument of Periapsis (deg)", "True Anomaly (deg)", "Latitude (deg)", "Longitude (deg)", "Altitude (m)"]
     selected_features = ["x", "y", "z", "Vx", "Vy", "Vz"]
+
     labeldata = pd.read_csv(labelfile)
     object_ids = labeldata['ObjectID'].unique()
-    train_ids, test_ids = train_test_split(object_ids,
-                                            test_size=0.2,
+    train_ids, test_ids = train_test_split(object_ids, 
+                                            test_size=0.2, 
                                             random_state=42)
     
-    # train_dataset = SatellitePoL(data_dir, train_ids, labelfile, 'NS', selected_features)
-    train_dataset = SatellitePoL(data_dir, train_ids,  selected_features)
+    train_dataset = SatellitePoL(data_dir, train_ids, labelfile, selected_features)
     scaler = train_dataset.normalize()
-    test_dataset = SatellitePoL(data_dir, test_ids,  selected_features)
+    test_dataset = SatellitePoL(data_dir, test_ids, labelfile, selected_features)
     test_dataset.normalize(scaler)
 
     train_dataloader = data.DataLoader(train_dataset, batch_size=32, shuffle=True)
-    for X in train_dataloader:
-        print(X.shape)
+    for X, target in train_dataloader:
+        print(X.shape, target.shape)
         break

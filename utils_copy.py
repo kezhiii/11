@@ -11,6 +11,9 @@ from scipy.ndimage import generic_filter
 from ignite.metrics.metric import Metric
 
 
+
+
+
 class SamplewiseAccuracy(Metric):
     """ Segmentation samplewise accuracy. This metric can be attached to 
     an ignite evaluator engine and will return the samplewise accuracy
@@ -343,71 +346,27 @@ def plot_barcode(class_num, gt=None, pred=None, level=None, show=True, save_file
     # color_map = {}
     # for i in range(class_num):
     #     color_map[str(i)] = plt.cm.Set1(i)
-    # 未机动部分颜色
-    no_maneuver_colors = {
-        0: (0.96, 0.76, 0.76, 0.8),  # 浅粉色 - 无机动
-        1: (0.76, 0.96, 0.76, 0.8),  # 浅绿色 - 低强度未机动预测
-        2: (0.76, 0.76, 0.96, 0.8),  # 浅紫色 - 中强度未机动预测
-        3: (0.96, 0.86, 0.76, 0.8)  # 浅粉色 - 高强度未机动预测
-    }
-    # 机动部分颜色 (新增颜色：浅蓝色)
-    maneuver_color = (0.76, 0.96, 0.96, 0.8)  # 浅蓝色 - 所有强度的机动部分
 
-    # 创建一个基于机动强度和预测结果的颜色数组
-    def create_color_array(data, level_data, is_pred=False):
-        colors = []
-        if data is not None and level_data is not None:
-            a, b = data.shape
-            for i in range(a):
-                # 获取当前样本的机动强度
-                intensity = int(level_data[i][0]) if level_data[i][0] <= 3 else 0
-                sample_colors = []
+    color_map = plt.cm.Set1
 
-                for j in range(b):
-                    # 如果是预测结果，区分机动和未机动部分
-                    if data[i][j] != 0:
-                        sample_colors.append(maneuver_color)
-                    # 未机动部分使用对应强度的未机动颜色
-                    else:
-                        sample_colors.append(no_maneuver_colors[intensity])
-
-                colors.append(sample_colors)
-        return colors
-
-    # 准备用于绘图的颜色数据
-    gt_colors = create_color_array(gt, level, False) if gt is not None else None
-    pred_colors = create_color_array(pred, level, True) if pred is not None else None
-
-    # 设置图形属性
     axprops = dict(xticks=[], yticks=[], frameon=False)
+    barprops = dict(aspect='auto', cmap=color_map,
+                interpolation='nearest', vmin=0, vmax=9)
 
-    fig = plt.figure(figsize=(18, 18))
+    fig = plt.figure(figsize=(6, 6))
 
-    # 绘制水平条形码图
-    if gt is not None and gt_colors:
+    # a horizontal barcode
+    if gt is not None:
         ax1 = fig.add_axes([0, 0.45, 1, 0.2], **axprops)
         ax1.set_title('Ground Truth')
-        # 使用imshow显示颜色数组
-        ax1.imshow(gt_colors[:10], aspect='auto', interpolation='nearest')
+        # ax1.imshow(gt.reshape((1, -1)), **barprops)
+        ax1.imshow(gt[:10], **barprops)
 
-    if pred is not None and pred_colors:
+    if pred is not None:
         ax2 = fig.add_axes([0, 0.15, 1, 0.2], **axprops)
         ax2.set_title('Predicted')
-        # 使用imshow显示颜色数组
-        ax2.imshow(pred_colors[:10], aspect='auto', interpolation='nearest')
-
-    # 添加颜色图例
-    from matplotlib.patches import Patch
-
-    legend_elements = [
-        Patch(facecolor=no_maneuver_colors[0], label='No Maneuver'),
-        Patch(facecolor=maneuver_color, label='Maneuver Detection'),
-        Patch(facecolor=no_maneuver_colors[1], label='Low'),
-        Patch(facecolor=no_maneuver_colors[2], label='Mid'),
-        Patch(facecolor=no_maneuver_colors[3], label='High'),
-    ]
-    # 将图例添加到图形中
-    fig.legend(handles=legend_elements, loc='upper right', title='Maneuver Intensity')
+        # ax2.imshow(pred.reshape((1, -1)), **barprops)
+        ax2.imshow(pred[:10], **barprops)
     # 各种机动数量
     none_num = 0
     low_num = 0
@@ -448,7 +407,6 @@ def plot_barcode(class_num, gt=None, pred=None, level=None, show=True, save_file
                         for j in range(b):
                             # 总low误差=low误差+真实时间-预测时间
                             low_wait = low_wait + gt[i][j] - pred[i][j]
-
                 elif level[i][0] == 2:
                     mid_num += 1
                     if pred[i][b - 1] == 0:
@@ -475,11 +433,31 @@ def plot_barcode(class_num, gt=None, pred=None, level=None, show=True, save_file
     mid_wait = mid_wait/(mid_num-mid_fail)*5
     high_wait = high_wait/(high_num-high_fail)*5
     maneuver_precision = (low_num-low_fail+mid_num-mid_fail+high_num-high_fail)/(a-none_num)
-    print("未机动卫星数量：", none_num,"，","未机动检出率：",none_precision)
+    print("未机动卫星数量：", none_num,"，","未机动检出率：",none_precision,"，","检测成功数量：",none_num-none_fail)
     print("总机动卫星数量：", low_num+mid_num+high_num,"，","总体机动检测成功率：",maneuver_precision)
     print("低强度机动卫星数量：", low_num,"，","低强度机动检测成功率",low_precision,"，",f"平均延迟{low_wait}s")
     print("中强度机动卫星数量：", mid_num,"，","中强度机动检测成功率",mid_precision,"，",f"平均延迟{mid_wait}s")
     print("高强度机动卫星数量：", high_num,"，","高强度机动检测成功率",high_precision,"，",f"平均延迟{high_wait}s")
+
+    y_ticks = range(min(len(gt[:10]), len(level[:10])))
+    y_tick_labels = []
+    for i in y_ticks:
+        if level[i][0] == 0:
+            y_tick_labels.append('None')
+        elif level[i][0] == 1:
+            y_tick_labels.append('Low')
+        elif level[i][0] == 2:
+            y_tick_labels.append('Mid')
+        else:
+            y_tick_labels.append('High')
+    if gt is not None:
+        ax1.set_yticks(y_ticks)
+        ax1.set_yticklabels(y_tick_labels)
+    if pred is not None:
+        ax2.set_yticks(y_ticks)
+        ax2.set_yticklabels(y_tick_labels)
+
+
     if save_file is not None:
         fig.savefig(save_file, dpi=400)
     if show:

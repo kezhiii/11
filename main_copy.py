@@ -15,6 +15,7 @@ from scipy.ndimage import median_filter
 import torch
 import torch.nn.functional as F
 
+
 import optuna
 
 from dataset import SatellitePoL
@@ -69,6 +70,7 @@ def evaluate_with_metrics(model, dataloader, logger, epoch, device, is_final=Fal
     meaniou = MeanIoU()
     freqiou = FrequencyWeightedIoU()
 
+
     labels = []
     predictions = []
     levels = []
@@ -82,7 +84,7 @@ def evaluate_with_metrics(model, dataloader, logger, epoch, device, is_final=Fal
 
             boundary = target['sub_boundary_label'].permute(0, 2, 1).to(torch.float32)
 
-            feature, label, boundary, level = feature.to(device), label.to(device), boundary.to(device), level.to(device)
+            feature, label, boundary ,level = feature.to(device), label.to(device), boundary.to(device), level.to(device)
 
             output = model.ddim_sample(feature, 42)
             # for i in range(output.shape[0]):
@@ -110,7 +112,7 @@ def evaluate_with_metrics(model, dataloader, logger, epoch, device, is_final=Fal
     # plot_barcode(5, labels[10:20], predictions[10:20], True, save_path)
     save_path_analysis = result_save / 'analysis.csv'
     levels = np.squeeze(levels)
-    plot_barcode(5, labels, predictions, levels, True, save_path, save_path_analysis)
+    plot_barcode(5, labels, predictions,levels, True, save_path, save_path_analysis)
 
     pointacc_ = pointacc.compute()
     meanacc_ = meanacc.compute()
@@ -120,12 +122,14 @@ def evaluate_with_metrics(model, dataloader, logger, epoch, device, is_final=Fal
     # Logging the metrics with percentage in 5 demical points
     logger.info(f"Point Accuracy: {pointacc_:.5f}, mean Accuracy: {meanacc_:.5f}, mean IoU: {meaniou_:.5f}, freq IoU: {freqiou_:.5f}")
 
+
     overlap = [.1, .25, .5]
     tp, fp, fn = np.zeros(3), np.zeros(3), np.zeros(3)
 
     correct = 0
     total = 0
     edit = 0
+
 
     gt_contents = labels
     pred_contents = predictions
@@ -134,7 +138,7 @@ def evaluate_with_metrics(model, dataloader, logger, epoch, device, is_final=Fal
 
         gt_content = gt_contents[i]
         pred_content = pred_contents[i]
-
+        
         assert(len(gt_content) == len(pred_content))
 
         for i in range(len(gt_content)):
@@ -149,10 +153,11 @@ def evaluate_with_metrics(model, dataloader, logger, epoch, device, is_final=Fal
             tp[s] += tp1
             fp[s] += fp1
             fn[s] += fn1
-
+        
+        
     acc = 100 * float(correct) / total
     edit = (1.0 * edit) / len(gt_contents)
-    f1s = np.array([0, 0, 0], dtype=np.float32)
+    f1s = np.array([0, 0 ,0], dtype=np.float32)
     for s in range(len(overlap)):
         precision = tp[s] / float(tp[s] + fp[s])
         recall = tp[s] / float(tp[s] + fn[s])
@@ -162,7 +167,10 @@ def evaluate_with_metrics(model, dataloader, logger, epoch, device, is_final=Fal
         f1 = np.nan_to_num(f1) * 100
         f1s[s] = f1
 
+
     logger.info(f"Accuracy: {acc:.5f}, Edit: {edit:.5f}, F1: {f1s[0]:.5f}, {f1s[1]:.5f}, {f1s[2]:.5f}")
+
+
 
     if is_final:
 
@@ -173,8 +181,13 @@ def evaluate_with_metrics(model, dataloader, logger, epoch, device, is_final=Fal
 
         logger.info(classification_report(labels, predictions, digits=4))
 
-    return pointacc_, meanacc_, meaniou_, freqiou_
 
+
+
+
+    return pointacc_, meanacc_, meaniou_, freqiou_, 
+
+    
 
 def set_seed(seed):
     np.random.seed(seed)
@@ -183,9 +196,11 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True  # cudnn
 
 
+
+
 class Trainer:
-    def __init__(self, encoder_params, decoder_params, diffusion_params,
-                 num_classes, sample_rate, temporal_aug, set_sampling_seed, device):
+    def __init__(self, encoder_params, decoder_params, diffusion_params, 
+        num_classes, sample_rate, temporal_aug, set_sampling_seed, device):
 
         self.device = device
         self.num_classes = num_classes
@@ -225,62 +240,63 @@ class Trainer:
             val_dataset, batch_size=batch_size, shuffle=False, num_workers=1)
         test_loader = torch.utils.data.DataLoader(
             test_dataset, batch_size=batch_size, shuffle=False, num_workers=1)
-
-        for epoch in range(restore_epoch + 1, num_epochs):
+        
+        for epoch in range(restore_epoch+1, num_epochs):
 
             self.model.train()
-
+            
             epoch_running_loss = 0
-
+            
             for _, (data, target) in enumerate(train_loader):
+
 
                 feature = data.permute(0, 2, 1)
                 label = target['sub_label'].squeeze(2)
                 boundary = target['sub_boundary_label'].permute(0, 2, 1).to(torch.float32)
 
                 feature, label, boundary = feature.to(device), label.to(device), boundary.to(device)
-
-                loss_dict = self.model.get_training_loss(feature,
-                                                         event_gt=F.one_hot(label.long(), num_classes=self.num_classes).permute(0, 2, 1),
-                                                         boundary_gt=boundary,
-                                                         encoder_ce_criterion=ce_criterion,
-                                                         encoder_mse_criterion=mse_criterion,
-                                                         encoder_boundary_criterion=bce_criterion,
-                                                         decoder_ce_criterion=ce_criterion,
-                                                         decoder_mse_criterion=mse_criterion,
-                                                         decoder_boundary_criterion=bce_criterion,
-                                                         soft_label=soft_label
-                                                         )
+                
+                loss_dict = self.model.get_training_loss(feature, 
+                    event_gt=F.one_hot(label.long(), num_classes=self.num_classes).permute(0, 2, 1),
+                    boundary_gt=boundary,
+                    encoder_ce_criterion=ce_criterion, 
+                    encoder_mse_criterion=mse_criterion,
+                    encoder_boundary_criterion=bce_criterion,
+                    decoder_ce_criterion=ce_criterion,
+                    decoder_mse_criterion=mse_criterion,
+                    decoder_boundary_criterion=bce_criterion,
+                    soft_label=soft_label
+                )
 
                 # ##############
                 # # feature    torch.Size([1, F, T])
                 # # label      torch.Size([1, T])
                 # # boundary   torch.Size([1, 1, T])
-                # # output    torch.Size([1, C, T])
+                # # output    torch.Size([1, C, T]) 
                 # ##################
                 total_loss = 0
 
-                for k, v in loss_dict.items():
+                for k,v in loss_dict.items():
                     total_loss += loss_weights[k] * v
 
                 # total_loss /= batch_size
                 # 反向传播更新参数
                 total_loss.backward()
-
+        
                 epoch_running_loss += total_loss.item()
-
+                
                 if step % batch_size == 0:
                     optimizer.step()
                     optimizer.zero_grad()
 
                 step += 1
-
+                
             epoch_running_loss /= len(train_dataset)
 
             logger.info(f'Epoch {epoch} - Running Loss {epoch_running_loss}')
 
             # 在每个 epoch 计算验证集的损失
-            if epoch % 2 == 0:
+            if epoch%2==0:
                 self.model.eval()
                 val_loss = 0
                 with torch.no_grad():
@@ -293,7 +309,7 @@ class Trainer:
 
                         loss_dict = self.model.get_training_loss(feature,
                                                                  event_gt=F.one_hot(label.long(),
-                                                                                    num_classes=self.num_classes).permute(0, 2, 1),
+                                                                 num_classes=self.num_classes).permute(0,2,1),
                                                                  boundary_gt=boundary,
                                                                  encoder_ce_criterion=ce_criterion,
                                                                  encoder_mse_criterion=mse_criterion,
@@ -321,7 +337,7 @@ class Trainer:
                 logger.info(f'Model saved at {m_path}')
 
             if epoch % 10 == 0:
-                # if epoch % 3 == 0:
+            # if epoch % 3 == 0:
                 # logger.info('Evaluating on train set')
                 # # evaluate accuracy on train set
                 # pointacc_, meanacc_, meaniou_, freqiou_ = evaluate_with_metrics(self.model, train_loader, logger, self.device)
@@ -329,6 +345,7 @@ class Trainer:
                 logger.info('Evaluating ')
                 # evaluate accuracy on validation set
                 pointacc_, meanacc_, meaniou_, freqiou_ = evaluate_with_metrics(self.model, test_loader, logger, epoch, self.device)
+
 
         # final save model
         m_path = model_save / f'epoch-{epoch}.model'
@@ -339,30 +356,35 @@ class Trainer:
         # evaluate accuracy on validation set
         pointacc_, meanacc_, meaniou_, freqiou_ = evaluate_with_metrics(self.model, test_loader, logger, epoch, self.device, True)
 
-        return meaniou_
+
+        return
+
+    
+
+def set_seed(seed):
+    np.random.seed(seed)
+    torch.manual_seed(seed)  # cpu
+    torch.cuda.manual_seed_all(seed)  # gpu
+    torch.backends.cudnn.deterministic = True  # cudnn
 
 
-def objective(trial):
-    global logger, result_save, model_save
-    # Generate hyperparameters
-    batch_size = trial.suggest_categorical('batch_size', [ 8, 16, 32])
-    learning_rate = trial.suggest_loguniform('learning_rate', 1e-4,1e-2)
+
+if __name__ == '__main__':
 
     # Load configuration
     temp = {}
     for k, v in args.items():
         temp[k] = SimpleNamespace(**v)
     config = SimpleNamespace(**temp)
-    config.training.batch_size = batch_size
-    config.training.learning_rate = learning_rate
+
 
     logger, files_save, result_save, model_save = setup_experiment_directories(
         config, Exp_name='Diffseg-Enc-hyper')
-
+    
     log_info(config, logger)
 
     set_seed(config.training.seed)
-
+    
     data_dir = config.data.data_dir
     labelfile = config.data.label_file
     selected_features = config.data.selected_features
@@ -370,12 +392,12 @@ def objective(trial):
 
     labeldata = pd.read_csv(labelfile)
     object_ids = labeldata['ObjectID'].unique()
-    train_ids, test_ids = train_test_split(object_ids,
-                                           test_size=0.2,
-                                           random_state=42)
+    train_ids, test_ids = train_test_split(object_ids, 
+                                            test_size=0.2, 
+                                            random_state=42)
     train_ids, val_ids = train_test_split(train_ids,
-                                          test_size=0.125,
-                                          random_state=42)
+                                            test_size=0.125,
+                                            random_state=42)
 
     train_dataset = SatellitePoL(data_dir, train_ids, labelfile, selected_features)
     scaler = train_dataset.normalize()
@@ -384,31 +406,18 @@ def objective(trial):
     test_dataset = SatellitePoL(data_dir, test_ids, labelfile, selected_features)
     test_dataset.normalize(scaler)
 
-    trainer = Trainer(encoder_params=vars(config.encoder_params),
-                      decoder_params=vars(config.decoder_params),
-                      diffusion_params=vars(config.diffusion_params),
-                      num_classes=config.data.n_sub_classes,
-                      sample_rate=config.training.sample_rate,
-                      temporal_aug=config.training.temporal_aug,
-                      set_sampling_seed=config.training.seed,
-                      device=config.training.device)
 
-    meaniou = trainer.train(
+    trainer = Trainer(encoder_params = vars(config.encoder_params), 
+                    decoder_params = vars(config.decoder_params),
+                    diffusion_params = vars(config.diffusion_params),
+                    num_classes = config.data.n_sub_classes,
+                    sample_rate = config.training.sample_rate,
+                    temporal_aug = config.training.temporal_aug,
+                    set_sampling_seed = config.training.seed,
+                    device = config.training.device)
+
+    trainer.train(
         train_dataset, val_dataset, test_dataset,
         vars(config.loss_weights), config.training.soft_label,
-        config.training.num_epochs, batch_size, learning_rate, config.training.weight_decay)
+        config.training.num_epochs, config.training.batch_size, config.training.learning_rate, config.training.weight_decay)
 
-    return meaniou
-
-
-if __name__ == "__main__":
-    study = optuna.create_study(direction='maximize')
-    study.optimize(objective, n_trials=10)
-
-    print('Best trial:')
-    trial = study.best_trial
-
-    print('  Value:', trial.value)
-    print('  Params:')
-    for key, value in trial.params.items():
-        print('    {}: {}'.format(key, value))

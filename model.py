@@ -8,12 +8,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from scipy.ndimage import gaussian_filter1d
 
-
 # Modified from DiffusionDet and pytorch-diffusion-model
 
 ########################################################################################
 
-def get_timestep_embedding(timesteps, embedding_dim):  # for diffusion model
+def get_timestep_embedding(timesteps, embedding_dim): # for diffusion model
     # timesteps: batch,
     # out:       batch, embedding_dim
     """
@@ -32,20 +31,17 @@ def get_timestep_embedding(timesteps, embedding_dim):  # for diffusion model
     emb = timesteps.float()[:, None] * emb[None, :]
     emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
     if embedding_dim % 2 == 1:  # zero pad
-        emb = torch.nn.functional.pad(emb, (0, 1, 0, 0))
+        emb = torch.nn.functional.pad(emb, (0,1,0,0))
     return emb
-
 
 def swish(x):
     return x * torch.sigmoid(x)
-
 
 def extract(a, t, x_shape):
     """extract the appropriate  t  index for a batch of indices"""
     batch_size = t.shape[0]
     out = a.gather(-1, t)
     return out.reshape(batch_size, *((1,) * (len(x_shape) - 1)))
-
 
 def cosine_beta_schedule(timesteps, s=0.008):
     """
@@ -59,16 +55,13 @@ def cosine_beta_schedule(timesteps, s=0.008):
     betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
     return torch.clip(betas, 0, 0.999)
 
-
-def normalize(x, scale):  # [0,1] > [-scale, scale]
+def normalize(x, scale): # [0,1] > [-scale, scale]
     x = (x * 2 - 1.) * scale
     return x
 
-
-def denormalize(x, scale):  # [-scale, scale] > [0,1]
+def denormalize(x, scale): #  [-scale, scale] > [0,1]
     x = ((x / scale) + 1) / 2
     return x
-
 
 ######################################################################################
 
@@ -77,7 +70,8 @@ class ASDiffusionModel(nn.Module):
         super(ASDiffusionModel, self).__init__()
 
         self.device = device
-        # self.num_classes = num_classes
+        self.num_classes = num_classes
+
 
         """        
             betas随时间步数逐渐增大，控制加噪的强度，是噪声系数。采用cos余弦采样
@@ -131,6 +125,7 @@ class ASDiffusionModel(nn.Module):
 
         self.detach_decoder = diffusion_params['detach_decoder']
 
+
         # zk 使用cond_types中定义的条件类型
         self.cond_types = diffusion_params['cond_types']
 
@@ -138,17 +133,14 @@ class ASDiffusionModel(nn.Module):
         if self.use_instance_norm:
             self.ins_norm = nn.InstanceNorm1d(encoder_params['input_dim'], track_running_stats=False)
 
-        decoder_params['input_dim'] = len([i for i in encoder_params['feature_layer_indices'] if i not in [-1, -2]]) * \
-                                      encoder_params['num_f_maps']
-        if -1 in encoder_params['feature_layer_indices']:  # -1 means "video feature"
+        decoder_params['input_dim'] = len([i for i in encoder_params['feature_layer_indices'] if i not in [-1, -2]]) * encoder_params['num_f_maps']
+        if -1 in encoder_params['feature_layer_indices']: # -1 means "video feature"
             decoder_params['input_dim'] += encoder_params['input_dim']
-        if -2 in encoder_params['feature_layer_indices']:  # -2 means "encoder prediction"
-            # decoder_params['input_dim'] += self.num_classes
-            decoder_params['input_dim'] += 0
+        if -2 in encoder_params['feature_layer_indices']: # -2 means "encoder prediction"
+            decoder_params['input_dim'] += self.num_classes
 
-        # 为了方便修改直接将num_classes改为6，按需修改
-        decoder_params['num_classes'] = 6
-        encoder_params['num_classes'] = 6
+        decoder_params['num_classes'] = num_classes
+        encoder_params['num_classes'] = num_classes
         encoder_params.pop('use_instance_norm')
 
         self.encoder = EncoderModel(**encoder_params)
@@ -156,51 +148,53 @@ class ASDiffusionModel(nn.Module):
 
     def predict_noise_from_start(self, x_t, t, x0):
         return (
-                (extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t - x0) /
-                extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape)
+            (extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t - x0) /
+            extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape)
         )
-
     # Xt由X0表示的公式
-    def q_sample(self, x_start, t, noise=None):  # forward diffusion
+    def q_sample(self, x_start, t, noise=None): # forward diffusion
         if noise is None:
             noise = torch.randn_like(x_start)
 
         sqrt_alphas_cumprod_t = extract(self.sqrt_alphas_cumprod, t, x_start.shape)
         sqrt_one_minus_alphas_cumprod_t = extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape)
 
+
         return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
 
-    def model_predictions(self, x, t):
+    def model_predictions(self, backbone_feats, x, t):
 
-        x_m = torch.clamp(x, min=-1 * self.scale, max=self.scale)  # [-scale, +scale]
-        x_m = denormalize(x_m, self.scale)  # [0, 1]
+        x_m = torch.clamp(x, min=-1 * self.scale, max=self.scale) # [-scale, +scale]
+        x_m = denormalize(x_m, self.scale)                        # [0, 1]
 
-        assert (x_m.max() <= 1 and x_m.min() >= 0)
-        x_start = self.decoder(t, x_m.float())  # torch.Size([1, C, T])
+        assert(x_m.max() <= 1 and x_m.min() >= 0)
+        x_start = self.decoder(backbone_feats, t, x_m.float()) # torch.Size([1, C, T])
         x_start = F.softmax(x_start, 1)
-        assert (x_start.max() <= 1 and x_start.min() >= 0)
+        assert(x_start.max() <= 1 and x_start.min() >= 0)
 
-        x_start = normalize(x_start, self.scale)  # [-scale, +scale]
+        x_start = normalize(x_start, self.scale)                              # [-scale, +scale]
         x_start = torch.clamp(x_start, min=-1 * self.scale, max=self.scale)
 
         pred_noise = self.predict_noise_from_start(x, t, x_start)
 
         return pred_noise, x_start
 
-    def prepare_targets(self, video_feats):
+
+    def prepare_targets(self, event_gt):
 
         # event_gt: normalized [0, 1]，原始数据X0做归一化处理
 
-        # assert(video_feats.max() <= 1 and video_feats.min() >= 0)
+
+        assert(event_gt.max() <= 1 and event_gt.min() >= 0)
 
         # 随机选取一个不大于self.num_timesteps的整数作为时间步
         t = torch.randint(0, self.num_timesteps, (1,), device=self.device).long()
 
         # 生成一个与标签数据形状相同的噪音
-        noise = torch.randn(size=video_feats.shape, device=self.device)
+        noise = torch.randn(size=event_gt.shape, device=self.device)
 
         # 对标签进行归一化处理
-        x_start = (video_feats * 2. - 1.) * self.scale  # [-scale, +scale]
+        x_start = (event_gt * 2. - 1.) * self.scale  #[-scale, +scale]
 
         # noise sample，加噪
         x = self.q_sample(x_start=x_start, t=t, noise=noise)
@@ -209,76 +203,79 @@ class ASDiffusionModel(nn.Module):
         x = torch.clamp(x, min=-1 * self.scale, max=self.scale)
 
         # 归一化
-        video_feats_diffused = ((x / self.scale) + 1) / 2.  # normalized [0, 1]
+        event_diffused = ((x / self.scale) + 1) / 2.           # normalized [0, 1]
 
-        return video_feats_diffused, noise, t
+        return event_diffused, noise, t
 
-    def forward(self, backbone_feats_diffused, t):  # only for train
 
-        # if self.detach_decoder:
-        #     backbone_feats = backbone_feats_diffused.detach()
+    def forward(self, backbone_feats, t, event_diffused, event_gt=None, boundary_gt=None): # only for train
 
-        assert (backbone_feats_diffused.max() <= 1 and backbone_feats_diffused.min() >= 0)
+        if self.detach_decoder:
+            backbone_feats = backbone_feats.detach()
+
+        assert(event_diffused.max() <= 1 and event_diffused.min() >= 0)
 
         cond_type = random.choice(self.cond_types)
 
         if cond_type == 'full':
-            event_out = self.decoder(t, backbone_feats_diffused.float())
+            event_out = self.decoder(backbone_feats, t, event_diffused.float())
 
         elif cond_type == 'zero':
-            event_out = self.decoder(t, backbone_feats_diffused.float())
+            event_out = self.decoder(torch.zeros_like(backbone_feats), t, event_diffused.float())
 
-        # elif cond_type == 'boundary05-':
-        #     feature_mask = (boundary_gt < 0.5).float() # maybe try 0.1
-        #     event_out = self.decoder(feature_mask * backbone_feats, t, event_diffused.float())
-        #
-        # elif cond_type == 'boundary03-':
-        #     feature_mask = (boundary_gt < 0.3).float() # maybe try 0.1
-        #     event_out = self.decoder(feature_mask * backbone_feats, t, event_diffused.float())
+        elif cond_type == 'boundary05-':
+            feature_mask = (boundary_gt < 0.5).float() # maybe try 0.1
+            event_out = self.decoder(feature_mask * backbone_feats, t, event_diffused.float())
 
-        # elif cond_type == 'segment=1':
-        #     event_gt = torch.argmax(event_gt, dim=1, keepdim=True).long() # 1, 1, T
-        #     events = torch.unique(event_gt)
-        #     random_event = np.random.choice(events.cpu().numpy())
-        #     feature_mask = (event_gt != random_event).float()
-        #     event_out = self.decoder(feature_mask * backbone_feats, t, event_diffused.float())
-        #
-        # elif cond_type == 'segment=2':
-        #     event_gt = torch.argmax(event_gt, dim=1, keepdim=True).long() # 1, 1, T
-        #     events = torch.unique(event_gt)
-        #     random_event_1 = np.random.choice(events.cpu().numpy())
-        #     random_event_2 = np.random.choice(events.cpu().numpy())
-        #     feature_mask = (event_gt != random_event_1).float() * (event_gt != random_event_2).float()
-        #     event_out = self.decoder(feature_mask * backbone_feats, t, event_diffused.float())
+        elif cond_type == 'boundary03-':
+            feature_mask = (boundary_gt < 0.3).float() # maybe try 0.1
+            event_out = self.decoder(feature_mask * backbone_feats, t, event_diffused.float())
+
+        elif cond_type == 'segment=1':
+            event_gt = torch.argmax(event_gt, dim=1, keepdim=True).long() # 1, 1, T
+            events = torch.unique(event_gt)
+            random_event = np.random.choice(events.cpu().numpy())
+            feature_mask = (event_gt != random_event).float()
+            event_out = self.decoder(feature_mask * backbone_feats, t, event_diffused.float())
+
+        elif cond_type == 'segment=2':
+            event_gt = torch.argmax(event_gt, dim=1, keepdim=True).long() # 1, 1, T
+            events = torch.unique(event_gt)
+            random_event_1 = np.random.choice(events.cpu().numpy())
+            random_event_2 = np.random.choice(events.cpu().numpy())
+            feature_mask = (event_gt != random_event_1).float() * (event_gt != random_event_2).float()
+            event_out = self.decoder(feature_mask * backbone_feats, t, event_diffused.float())
 
         else:
             raise Exception('Invalid Cond Type')
 
         return event_out
 
-    def get_training_loss(self, video_feats,
-                          encoder_mse_criterion, decoder_mse_criterion,
-                          soft_label):
+    def get_training_loss(self, video_feats, event_gt, boundary_gt,
+          encoder_ce_criterion, encoder_mse_criterion, encoder_boundary_criterion,
+          decoder_ce_criterion, decoder_mse_criterion, decoder_boundary_criterion,
+          soft_label):
 
         if self.use_instance_norm:
             video_feats = self.ins_norm(video_feats)
 
+
         encoder_out, backbone_feats = self.encoder(video_feats, get_features=True)
 
         # 计算编码交叉熵损失
-        # if soft_label is None:
-        #     encoder_ce_loss = encoder_ce_criterion(
-        #         encoder_out.transpose(2, 1).contiguous().view(-1, self.num_classes),
-        #         torch.argmax(event_gt, dim=1).view(-1).long()   # batch_size must = 1
-        #     )
-        # else:
-        #     soft_event_gt = torch.clone(event_gt).float().cpu().numpy()
-        #     for i in range(soft_event_gt.shape[1]):
-        #         soft_event_gt[0,i] = gaussian_filter1d(soft_event_gt[0,i], soft_label)
-        #     soft_event_gt = torch.from_numpy(soft_event_gt).to(self.device)
-        #
-        #     encoder_ce_loss = - soft_event_gt * F.log_softmax(encoder_out, 1)
-        #     encoder_ce_loss = encoder_ce_loss.sum(0).sum(0)
+        if soft_label is None:
+            encoder_ce_loss = encoder_ce_criterion(
+                encoder_out.transpose(2, 1).contiguous().view(-1, self.num_classes),
+                torch.argmax(event_gt, dim=1).view(-1).long()   # batch_size must = 1
+            )
+        else:
+            soft_event_gt = torch.clone(event_gt).float().cpu().numpy()
+            for i in range(soft_event_gt.shape[1]):
+                soft_event_gt[0,i] = gaussian_filter1d(soft_event_gt[0,i], soft_label)
+            soft_event_gt = torch.from_numpy(soft_event_gt).to(self.device)
+
+            encoder_ce_loss = - soft_event_gt * F.log_softmax(encoder_out, 1)
+            encoder_ce_loss = encoder_ce_loss.sum(0).sum(0)
 
         # 均方差损失
         encoder_mse_loss = torch.clamp(encoder_mse_criterion(
@@ -286,58 +283,57 @@ class ASDiffusionModel(nn.Module):
             F.log_softmax(encoder_out.detach()[:, :, :-1], dim=1)),
             min=0, max=16)
 
-        # encoder_boundary_loss = torch.tensor(0).to(self.device) # No boundary loss for encoder
-        # encoder_ce_loss = encoder_ce_loss.mean()
+        encoder_boundary_loss = torch.tensor(0).to(self.device) # No boundary loss for encoder
+        encoder_ce_loss = encoder_ce_loss.mean()
         encoder_mse_loss = encoder_mse_loss.mean()
 
         ##########
-        # ****************************************
-        # 加噪，此时应该改为对feature加噪而不是对标签加噪
-        # ****************************************
-        backbone_feats_diffused, noise, t = self.prepare_targets(video_feats)
-        event_out = self.forward(backbone_feats_diffused, t)
-        #
-        # decoder_boundary = 1 - torch.einsum('bicl,bcjl->bijl',
-        #     F.softmax(event_out[:,None,:,1:], 2),
-        #     F.softmax(event_out[:,:,None,:-1].detach(), 1)
-        # ).squeeze(1)
 
-        # if soft_label is None:    # To improve efficiency
-        #     decoder_ce_loss = decoder_ce_criterion(
-        #         event_out.transpose(2, 1).contiguous().view(-1, self.num_classes),
-        #         torch.argmax(event_gt, dim=1).view(-1).long()   # batch_size must = 1
-        #     )
-        # else:
-        #     soft_event_gt = torch.clone(event_gt).float().cpu().numpy()
-        #     for i in range(soft_event_gt.shape[1]):
-        #         soft_event_gt[0,i] = gaussian_filter1d(soft_event_gt[0,i], soft_label) # the soft label is not normalized
-        #     soft_event_gt = torch.from_numpy(soft_event_gt).to(self.device)
-        #
-        #     decoder_ce_loss = - soft_event_gt * F.log_softmax(event_out, 1)
-        #     decoder_ce_loss = decoder_ce_loss.sum(0).sum(0)
+        event_diffused, noise, t = self.prepare_targets(event_gt)
+        event_out = self.forward(backbone_feats, t, event_diffused, event_gt, boundary_gt)
+
+        decoder_boundary = 1 - torch.einsum('bicl,bcjl->bijl',
+            F.softmax(event_out[:,None,:,1:], 2),
+            F.softmax(event_out[:,:,None,:-1].detach(), 1)
+        ).squeeze(1)
+
+        if soft_label is None:    # To improve efficiency
+            decoder_ce_loss = decoder_ce_criterion(
+                event_out.transpose(2, 1).contiguous().view(-1, self.num_classes),
+                torch.argmax(event_gt, dim=1).view(-1).long()   # batch_size must = 1
+            )
+        else:
+            soft_event_gt = torch.clone(event_gt).float().cpu().numpy()
+            for i in range(soft_event_gt.shape[1]):
+                soft_event_gt[0,i] = gaussian_filter1d(soft_event_gt[0,i], soft_label) # the soft label is not normalized
+            soft_event_gt = torch.from_numpy(soft_event_gt).to(self.device)
+
+            decoder_ce_loss = - soft_event_gt * F.log_softmax(event_out, 1)
+            decoder_ce_loss = decoder_ce_loss.sum(0).sum(0)
 
         decoder_mse_loss = torch.clamp(decoder_mse_criterion(
             F.log_softmax(event_out[:, :, 1:], dim=1),
             F.log_softmax(event_out.detach()[:, :, :-1], dim=1)),
             min=0, max=16)
 
-        # decoder_boundary_loss = decoder_boundary_criterion(decoder_boundary, boundary_gt[:,:,1:])
-        # decoder_boundary_loss = decoder_boundary_loss.mean()
+        decoder_boundary_loss = decoder_boundary_criterion(decoder_boundary, boundary_gt[:,:,1:])
+        decoder_boundary_loss = decoder_boundary_loss.mean()
 
-        # decoder_ce_loss = decoder_ce_loss.mean()
+        decoder_ce_loss = decoder_ce_loss.mean()
         decoder_mse_loss = decoder_mse_loss.mean()
 
         loss_dict = {
-            # 'encoder_ce_loss': encoder_ce_loss,
+            'encoder_ce_loss': encoder_ce_loss,
             'encoder_mse_loss': encoder_mse_loss,
-            # 'encoder_boundary_loss': encoder_boundary_loss,
+            'encoder_boundary_loss': encoder_boundary_loss,
 
-            # 'decoder_ce_loss': decoder_ce_loss,
+            'decoder_ce_loss': decoder_ce_loss,
             'decoder_mse_loss': decoder_mse_loss,
-            # 'decoder_boundary_loss': decoder_boundary_loss,
+            'decoder_boundary_loss': decoder_boundary_loss,
         }
 
         return loss_dict
+
 
     @torch.no_grad()
     def ddim_sample(self, video_feats, seed=None):
@@ -353,7 +349,9 @@ class ASDiffusionModel(nn.Module):
             torch.cuda.manual_seed_all(seed)
 
         # torch.Size([1, 19, 4847])
-        shape = (video_feats.shape[0], 6, video_feats.shape[2])
+        shape = (video_feats.shape[0], self.num_classes, video_feats.shape[2])
+
+
 
         total_timesteps, sampling_timesteps, eta = self.num_timesteps, self.sampling_timesteps, self.ddim_sampling_eta
 
@@ -374,9 +372,7 @@ class ASDiffusionModel(nn.Module):
 
             # 预测初始值x_start和噪声pred_noise，然后再对x_start进行加噪得到time_next步的噪声数据
             # 在对time_next的噪声去噪得到新的x_start，循环往复
-            # backbone_feats是编码后轨迹，源程序仅预测标签数据，backbone_feats起到了辅助去噪的功能，不对backbone_feats预测
-            # 从一个随机噪声开始去噪，也就是randn x_time开始而不是加噪后数据开始，
-            pred_noise, x_start = self.model_predictions(x_time, time_cond)
+            pred_noise, x_start = self.model_predictions(backbone_feats, x_time, time_cond)
 
             x_return = torch.clone(x_start)
 
@@ -393,20 +389,19 @@ class ASDiffusionModel(nn.Module):
             noise = torch.randn_like(x_time)
 
             x_time = x_start * alpha_next.sqrt() + \
-                     c * pred_noise + \
-                     sigma * noise
+                  c * pred_noise + \
+                  sigma * noise
 
         x_return = denormalize(x_return, self.scale)
 
         if seed is not None:
-            t = 1000 * Time.time()  # current time in milliseconds
-            t = int(t) % 2 ** 16
+            t = 1000 * Time.time() # current time in milliseconds
+            t = int(t) % 2**16
             random.seed(t)
             torch.manual_seed(t)
             torch.cuda.manual_seed_all(t)
 
         return x_return
-
 
 # 实现相同填充的一维卷积
 class SamePadConv(nn.Module):
@@ -428,7 +423,6 @@ class SamePadConv(nn.Module):
             out = out[:, :, : -self.remove]
         return out
 
-
 # 卷积块
 class ConvBlock(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, dilation, final=False):
@@ -445,26 +439,24 @@ class ConvBlock(nn.Module):
         x = self.conv2(x)
         return x + residual
 
-
 # 多层卷积块
 class DilatedConvEncoder(nn.Module):
     def __init__(self, in_channels, channels, kernel_size):
         super().__init__()
         self.net = nn.Sequential(*[
             ConvBlock(
-                channels[i - 1] if i > 0 else in_channels,
+                channels[i-1] if i > 0 else in_channels,
                 channels[i],
                 kernel_size=kernel_size,
                 # 膨胀因子随着深度指数增加
-                dilation=2 ** i,
-                final=(i == len(channels) - 1)
+                dilation=2**i,
+                final=(i == len(channels)-1)
             )
             for i in range(len(channels))
         ])
 
     def forward(self, x):
         return self.net(x)
-
 
 # 在EncoderModel中两种不同的掩码生成方式，实际并未用到
 def generate_continuous_mask(B, T, n=5, l=0.1):
@@ -479,19 +471,16 @@ def generate_continuous_mask(B, T, n=5, l=0.1):
 
     for i in range(B):
         for _ in range(n):
-            t = np.random.randint(T - l + 1)
-            res[i, t:t + l] = False
+            t = np.random.randint(T-l+1)
+            res[i, t:t+l] = False
     return res
-
 
 def generate_binomial_mask(B, T, p=0.5):
     return torch.from_numpy(np.random.binomial(1, p, size=(B, T))).to(torch.bool)
 
-
 # ok输出两个量，一个用做计算交叉熵损失，一个用做条件在解码过程中
 class EncoderModel(nn.Module):
-    def __init__(self, num_layers, num_f_maps, input_dim, num_classes, kernel_size, normal_dropout_rate,
-                 channel_dropout_rate, temporal_dropout_rate, feature_layer_indices=None, mask_mode='all_true'):
+    def __init__(self, num_layers, num_f_maps, input_dim, num_classes, kernel_size, normal_dropout_rate, channel_dropout_rate, temporal_dropout_rate, feature_layer_indices=None, mask_mode='all_true'):
         super().__init__()
         self.input_dims = input_dim
         self.output_dims = num_f_maps * len(feature_layer_indices)
@@ -516,14 +505,14 @@ class EncoderModel(nn.Module):
             nn.Linear(1024, 256),
             nn.ReLU(),
             nn.Dropout(0.5),
-            # 要和label相同的维度，按需修改
-            nn.Linear(256, 6)
-
+            nn.Linear(256, num_classes)
         )
+
+
 
     def forward(self, x, get_features=False, mask=None):
 
-        x = x.transpose(2, 1)
+        x = x.transpose(2,1)
 
         # x: B x T x input_dims
         nan_mask = ~x.isnan().any(axis=-1)
@@ -568,11 +557,11 @@ class EncoderModel(nn.Module):
         else:
             return out
 
-
 # ok 解码器
 class DecoderModel(nn.Module):
     def __init__(self, input_dim, num_classes,
-                 num_layers, time_emb_dim, kernel_size, dropout_rate):
+        num_layers, num_f_maps, time_emb_dim, kernel_size, dropout_rate):
+
         super(DecoderModel, self).__init__()
 
         self.time_emb_dim = time_emb_dim
@@ -582,11 +571,13 @@ class DecoderModel(nn.Module):
             torch.nn.Linear(time_emb_dim, time_emb_dim)
         ])
 
-        self.conv_in = nn.Conv1d(num_classes, 128, 1)
-        self.module = MixedConvAttModuleV2(num_layers, input_dim, kernel_size, dropout_rate, time_emb_dim)
-        self.conv_out = nn.Conv1d(128, num_classes, 1)
+        self.conv_in = nn.Conv1d(num_classes, num_f_maps, 1)
+        self.module = MixedConvAttModuleV2(num_layers, num_f_maps, input_dim, kernel_size, dropout_rate, time_emb_dim)
+        self.conv_out =  nn.Conv1d(num_f_maps, num_classes, 1)
 
-    def forward(self, t, backbone_feats_diffused):
+
+    def forward(self, x, t, event):
+
         time_emb = get_timestep_embedding(t, self.time_emb_dim)
         # print("time_emb shape1", time_emb.shape)
         time_emb = self.time_in[0](time_emb)
@@ -596,82 +587,75 @@ class DecoderModel(nn.Module):
 
         # fra = self.conv_in(x)
 
-        # print("backbone_feats_diffused shape",backbone_feats_diffused.shape)
-        fra = self.conv_in(backbone_feats_diffused)
+
+        # print("event shape",event.shape)
+        fra = self.conv_in(event)
         # print("fra shape", fra.shape)
         # fra = self.module(event, fra, time_emb)
-        fra = self.module(fra, time_emb)
+        fra = self.module(fra, x, time_emb)
         event_out = self.conv_out(fra)
 
         return event_out
 
-
 #
-class MixedConvAttModuleV2(nn.Module):  # for decoder
-    # def __init__(self, num_layers, num_f_maps, input_dim_cross, kernel_size, dropout_rate, time_emb_dim=None):
-    def __init__(self, num_layers, input_dim_cross, kernel_size, dropout_rate, time_emb_dim=None):
+class MixedConvAttModuleV2(nn.Module): # for decoder
+    def __init__(self, num_layers, num_f_maps, input_dim_cross, kernel_size, dropout_rate, time_emb_dim=None):
         super(MixedConvAttModuleV2, self).__init__()
 
-        # 将时间嵌入转换为与标签噪音相同维度，修改为与轨迹相同维度
         if time_emb_dim is not None:
-            # self.time_proj = nn.Linear(time_emb_dim, num_f_maps)
-            self.time_proj = nn.Linear(time_emb_dim, input_dim_cross)
-        # print(time_emb_dim.shape)
-        # print(input_dim_cross)
-        # self.layers = nn.ModuleList([copy.deepcopy(
-        #     MixedConvAttentionLayerV2(num_f_maps, input_dim_cross, kernel_size, 2 ** i, dropout_rate)
-        # ) for i in range(num_layers)])  #2 ** i
-        self.layers = nn.ModuleList([copy.deepcopy(
-            MixedConvAttentionLayerV2(input_dim_cross, kernel_size, 2 ** i, dropout_rate)
-        ) for i in range(num_layers)])  # 2 ** i
+            self.time_proj = nn.Linear(time_emb_dim, num_f_maps)
 
-    def forward(self, x, time_emb=None):
+        self.layers = nn.ModuleList([copy.deepcopy(
+            MixedConvAttentionLayerV2(num_f_maps, input_dim_cross, kernel_size, 2 ** i, dropout_rate)
+        ) for i in range(num_layers)])  #2 ** i
+
+    def forward(self, x, x_cross, time_emb=None):
 
         if time_emb is not None:
             # swish(x) = x * torch.sigmoid(x),为时间步嵌入引入非线性特征
             # x
-            # print(x.shape, time_emb.shape)
-            x = x + self.time_proj(swish(time_emb))[:, :, None]
+            x = x + self.time_proj(swish(time_emb))[:,:,None]
             # print("x+time shape",x.shape)
 
         for layer in self.layers:
-            x = layer(x)
+            x = layer(x, x_cross)
 
         return x
 
 
 class MixedConvAttentionLayerV2(nn.Module):
 
-    def __init__(self, d_cross, kernel_size, dilation, dropout_rate):
+    def __init__(self, d_model, d_cross, kernel_size, dilation, dropout_rate):
         super(MixedConvAttentionLayerV2, self).__init__()
 
-        # self.d_model = d_model
+        self.d_model = d_model
         self.d_cross = d_cross
         self.kernel_size = kernel_size
         self.dilation = dilation
         self.dropout_rate = dropout_rate
         self.padding = (self.kernel_size // 2) * self.dilation
 
-        assert (self.kernel_size % 2 == 1)
+        assert(self.kernel_size % 2 == 1)
 
         self.conv_block = nn.Sequential(
-            nn.Conv1d(d_cross, d_cross, kernel_size, padding=self.padding, dilation=dilation),
+            nn.Conv1d(d_model, d_model, kernel_size, padding=self.padding, dilation=dilation),
         )
 
-        self.att_linear_q = nn.Conv1d(d_cross, d_cross, 1)
-        self.att_linear_k = nn.Conv1d(d_cross, d_cross, 1)
-        self.att_linear_v = nn.Conv1d(d_cross, d_cross, 1)
+        self.att_linear_q = nn.Conv1d(d_model + d_cross, d_model, 1)
+        self.att_linear_k = nn.Conv1d(d_model + d_cross, d_model, 1)
+        self.att_linear_v = nn.Conv1d(d_model, d_model, 1)
 
         self.ffn_block = nn.Sequential(
-            nn.Conv1d(d_cross, d_cross, 1),
+            nn.Conv1d(d_model, d_model, 1),
             nn.ReLU(),
-            nn.Conv1d(d_cross, d_cross, 1),
+            nn.Conv1d(d_model, d_model, 1),
         )
 
         self.dropout = nn.Dropout(dropout_rate)
-        self.norm = nn.InstanceNorm1d(d_cross, track_running_stats=False)
+        self.norm = nn.InstanceNorm1d(d_model, track_running_stats=False)
 
         self.attn_indices = None
+
 
     def get_attn_indices(self, l, device):
 
@@ -687,7 +671,7 @@ class MixedConvAttentionLayerV2(nn.Module):
             # 3  5  5  ....                           (k=3, //2)
             # 3  5  9   9 ...                         (k=3, //4)
 
-            indices = [i + self.padding for i in range(s, e, step)]
+            indices = [i + self.padding for i in range(s,e,step)]
 
             attn_indices.append(indices)
 
@@ -696,7 +680,8 @@ class MixedConvAttentionLayerV2(nn.Module):
         self.attn_indices = torch.from_numpy(attn_indices).long()
         self.attn_indices = self.attn_indices.to(device)
 
-    def attention(self, x):
+
+    def attention(self, x, x_cross):
 
         if self.attn_indices is None:
             self.get_attn_indices(x.shape[2], x.device)
@@ -704,10 +689,10 @@ class MixedConvAttentionLayerV2(nn.Module):
             if self.attn_indices.shape[0] < x.shape[2]:
                 self.get_attn_indices(x.shape[2], x.device)
 
-        flat_indicies = torch.reshape(self.attn_indices[:x.shape[2], :], (-1,))
+        flat_indicies = torch.reshape(self.attn_indices[:x.shape[2],:], (-1,))
 
-        x_q = self.att_linear_q(x)
-        x_k = self.att_linear_k(x)
+        x_q = self.att_linear_q(torch.cat([x, x_cross], 1))
+        x_k = self.att_linear_k(torch.cat([x, x_cross], 1))
         x_v = self.att_linear_v(x)
 
         x_k = torch.index_select(
@@ -723,11 +708,11 @@ class MixedConvAttentionLayerV2(nn.Module):
         att = torch.einsum('n c l, n c l k -> n l k', x_q, x_k)
 
         padding_mask = torch.logical_and(
-            self.attn_indices[:x.shape[2], :] >= self.padding,
-            self.attn_indices[:x.shape[2], :] < att.shape[1] + self.padding
-        )  # 1 keep, 0 mask
+            self.attn_indices[:x.shape[2],:] >= self.padding,
+            self.attn_indices[:x.shape[2],:] < att.shape[1] + self.padding
+        ) # 1 keep, 0 mask
 
-        att = att / np.sqrt(self.d_cross)
+        att = att / np.sqrt(self.d_model)
         att = att + torch.log(padding_mask + 1e-6)
         att = F.softmax(att, 2)
         att = att * padding_mask
@@ -736,13 +721,14 @@ class MixedConvAttentionLayerV2(nn.Module):
 
         return r
 
-    def forward(self, x):
+
+    def forward(self, x, x_cross):
 
         x_drop = self.dropout(x)
-        # x_cross_drop = self.dropout(x_cross)
+        x_cross_drop = self.dropout(x_cross)
 
         out1 = self.conv_block(x_drop)
-        out2 = self.attention(x_drop)
+        out2 = self.attention(x_drop, x_cross_drop)
 
         out = self.ffn_block(self.norm(out1 + out2))
 
@@ -750,37 +736,40 @@ class MixedConvAttentionLayerV2(nn.Module):
 
 
 if __name__ == "__main__":
+
+
     encoder_params = {
-        "use_instance_norm": False,
-        "num_layers": 5,
-        "num_f_maps": 64,
-        "input_dim": 6,
-        "kernel_size": 5,
-        "normal_dropout_rate": 0.5,
-        "channel_dropout_rate": 0.5,
-        "temporal_dropout_rate": 0.5,
-        "feature_layer_indices": [
-            1,
-            2,
-            3
-        ]
+      "use_instance_norm":False,
+      "num_layers":5,
+      "num_f_maps":64,
+      "input_dim":2048,
+      "kernel_size":5,
+      "normal_dropout_rate":0.5,
+      "channel_dropout_rate":0.5,
+      "temporal_dropout_rate":0.5,
+      "feature_layer_indices":[
+         1,
+         2,
+         3
+      ]
     }
 
     decoder_params = {
-        "num_layers": 8,
-        # "num_f_maps":64,
-        "time_emb_dim": 128,
-        "kernel_size": 5,
-        "dropout_rate": 0.1,
+      "num_layers":8,
+      "num_f_maps":64,
+      "time_emb_dim":128,
+      "kernel_size":5,
+      "dropout_rate": 0.5,
+      # "dropout_rate":0.1,
     }
 
     diffusion_params = {
-        "timesteps": 1000,
-        "sampling_timesteps": 25,
-        "ddim_sampling_eta": 1.0,
-        "snr_scale": 0.5,
-        "cond_types": ['full', 'zero'],
-        "detach_decoder": False,
+      "timesteps":1000,
+      "sampling_timesteps":25,
+      "ddim_sampling_eta":1.0,
+      "snr_scale":0.5,
+      "cond_types":  ['full', 'zero', 'boundary03-', 'segment=1', 'segment=1'],
+     "detach_decoder": False,
     }
 
     device = 'cpu'
@@ -790,7 +779,9 @@ if __name__ == "__main__":
     batch_size = 2
     feature_num = 2048
     seq_len = 100
-    num_classes = 6
+    num_classes = 4
+
+
 
     model = ASDiffusionModel(encoder_params, decoder_params, diffusion_params, num_classes, device)
 
@@ -799,32 +790,34 @@ if __name__ == "__main__":
     bce_criterion = nn.BCELoss(reduction='none')
     mse_criterion = nn.MSELoss(reduction='none')
 
+
     # ##############
     # # feature    torch.Size([1, F, T])
     # # label      torch.Size([1, T])
     # # boundary   torch.Size([1, 1, T])
-    # # output    torch.Size([1, C, T]) 
+    # # output    torch.Size([1, C, T])
     # ##################
 
+
     feature = torch.randn(batch_size, feature_num, seq_len)
-    # label = torch.randint(0, num_classes, (batch_size, seq_len))
-    # boundary = torch.randint(0, 2, (batch_size, 1, seq_len)).to(torch.float32)
+    label = torch.randint(0, num_classes, (batch_size, seq_len))
+    boundary = torch.randint(0, 2, (batch_size, 1, seq_len)).to(torch.float32)
+
 
     # feature, label, boundary, video = data
-    # feature, label, boundary = feature.to(device), label.to(device), boundary.to(device)
-    feature = feature.to(device)
+    feature, label, boundary = feature.to(device), label.to(device), boundary.to(device)
+
 
     # F.one_hot独热编码，将分类变量转换为二进制向量编码，每个向量只有一个元素是1，其余元素是0
-    loss_dict = model.get_training_loss(
-        feature,
-        # event_gt=F.one_hot(label.long(), num_classes=num_classes).permute(0, 2, 1),
-        # boundary_gt=boundary,
-        # encoder_ce_criterion=ce_criterion,
+    loss_dict = model.get_training_loss(feature,
+        event_gt=F.one_hot(label.long(), num_classes=num_classes).permute(0, 2, 1),
+        boundary_gt=boundary,
+        encoder_ce_criterion=ce_criterion,
         encoder_mse_criterion=mse_criterion,
-        # encoder_boundary_criterion=bce_criterion,
-        # decoder_ce_criterion=ce_criterion,
+        encoder_boundary_criterion=bce_criterion,
+        decoder_ce_criterion=ce_criterion,
         decoder_mse_criterion=mse_criterion,
-        # decoder_boundary_criterion=bce_criterion,
+        decoder_boundary_criterion=bce_criterion,
         soft_label=soft_label
     )
 
